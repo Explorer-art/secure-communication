@@ -8,7 +8,7 @@ import socket
 import string
 import threading
 
-ip = "192.168.1.81"
+ip = ""
 port = 27575
 
 number_maximum_lenght = 10
