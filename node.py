@@ -78,7 +78,7 @@ def get_route_list():
 	for line in lines:
 		line = line.replace("\n", "")
 		ip = line.split(" ")
-		route_list.append(ip)
+		route_list.append(ip[0])
 	
 	return route_list
 
@@ -133,28 +133,6 @@ def add_node(address):
 	file = open("route_list.txt", "a")
 	file.write(f"{address[0]}:{address[1]} " + datetime.datetime.now())
 	file.close()
-
-def check_number(number):
-	for ip in route_list:
-		try:
-			if ip == server_ip:
-				continue
-			
-			client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-			client.connect((ip, port))
-
-			data = "REQUEST=CHECK_NUMBER:" + number
-
-			client.send(data.encode("utf-8"))
-
-			data = client.recv(1024).decode("utf-8")
-
-			if data == "REQUEST=TRUE":
-				return ip
-		except:
-			return False
-		
-	return False
 
 def send_node(ip, number, mode, message):
 	try:
@@ -217,108 +195,57 @@ def send_message(message, number_connect): #Отправка сообщения 
 	except Exception as error:
 		print(error)
 
-def broadcast(message): #Отправка сообщения всем пользователям
+def send_all_clients(data): #Отправка сообщения всем пользователям
 	for client in clients:
-		client.send(message.encode("utf-8"))
+		client.send(data)
 
-	log("Broadcast message sended")
-
-def handle(client, address): #Пользователь
-	global numbers_connect
-	try:
-		public_key = client.recv(4096)
-
-		number = hashlib.sha256(public_key).hexdigest()
-
-		data = client.recv(1024).decode("utf-8")
-
-		number_lenght = len(data)
-
-		if number_lenght == number_maximum_length: #Проверка длины номера
-			number_connect = data
-			numbers_connect.append(number_connect)
-		else:
-			kick(client, address, "The number is too long or short!")
-
-		client.send("REQUEST=WAITING".encode("utf-8"))
-
-		ip_server_connect = ""
-
-		check_n = False
-
-		while True:
-			try:
-				if number in numbers_connect:
-					if number_connect in numbers_connect:
-						check_n = True
-						break
-					else:
-						ip_server_connect = check_number(number_connect)
-
-						if ip_server_connect != False:
-							check_n = True
-							break
-			except Exception as error:
-				print(error)
-		
-		if check_n == True:
-			client.send("REQUEST=SUCCESFUL_CHANNEL_CREATED".encode("utf-8"))
-
-			numbers.append(number)
-			clients.append(client)
-			addresses.append(address)
-		
-		time.sleep(1)
-		
-		if number_connect in numbers:
-			number_connect_index = numbers.index(number_connect)
-			client_data = clients[number_connect_index]
-			client_data.send(public_key)
-		else:
-			if ip_server_connect != "":
-				send_node(ip_server_connect, number_connect, "KEY", public_key)
-		
-		log(f"{address[0]}:{address[1]} connected to channel")
-	except:
-		log(f"{address[0]}:{address[1]} disconnected")
+def send_all_nodes(data):
+	nodes = get_route_list()
+	for ip in nodes:
+		if ip == server_ip:
+			continue
 
 		try:
-			numbers.remove(number)
-			clients.remove(client)
-			addresses.remove(address)
+			client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+			client.connect((ip, port))
+			client.send(data)
 			client.close()
 		except:
-			pass
+			log(f"{ip}:{port} connect failed")
 
-		return False
-
+def handle(client, address): #Пользователь
 	while True:
 		try:
-			message = client.recv(1024)
+			data = client.recv(1024)
 
-			if ip_server_connect == "":
-				send_message(message, number_connect)
-			else:
-				send_node(ip_server_connect, number_connect, "MESSAGE", message)
+			send_all_clients(data)
+			send_all_nodes(data)
+
+			log(f"{address[0]}:{address[1]} send message")
 		except:
-			log(f"{address[0]}:{address[1]} disconnected")
-
 			try:
-				numbers.remove(number)
 				clients.remove(client)
-				addresses.remove(address)
 				client.close()
 			except:
 				pass
 
+			log(f"{address[0]}:{address[1]} disconnected")
 			break
 
 def check_route_list():
 	while True:
-		route_list = get_route_list()
-		pass
+		route_list = []
+
+		file = open("route_list.txt", "r")
+		lines = file.readlines()
+		file.close()
+
+		for line in lines:
+			line = line.replace("\n", "")
+			route_list.append(line)
 
 def server_handle(ip, port):
+	global clients
 	log("Started server..")
 
 	server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -334,73 +261,29 @@ def server_handle(ip, port):
 
 		log(f"{address[0]}:{address[1]} connected ")
 
-		data = client.recv(1024).decode("utf-8")
+		try:
+			data = client.recv(1024).decode("utf-8")
 
-		if data == "REQUEST=USER_CONNECT":
-			if address[0] in banned_ips:
-				kick(client, address, "You have been banned!")
-			elif address in addresses:
-				log(f"{address[0]}:{address[1]} already connected")
-				kick(client, address, "You already connected!")
+			if data == "REQUEST=USER_CONNECT":
+				if client in clients:
+					log(f"{address[0]}:{address[1]} already connected")
+					kick(client, address, "You already connected!")
 
-			client.send("REQUEST=SUCCESFUL_AUTH".encode("utf-8"))
+				client.send("REQUEST=SUCCESFUL_AUTH".encode("utf-8"))
 
-			threading.Thread(target=handle, daemon=True, args=(client, address)).start()
-		elif data == "REQUEST=GET_ROUTE_LIST":
-			send_file(client, "route_list.txt")
-			log(f"{address[0]}:{address[1]} get route list")
-			client.close()
-		elif data[0:20] == "REQUEST=CHECK_NUMBER":
-			log(f"{address[0]}:{address[1]} check number")
-			number = data[21:21 + number_maximum_length]
+				clients.append(client)
 
-			if len(number) != number_maximum_length:
-				client.send("REQUEST=ERROR_NUMBER_LENGTH".encode("utf-8"))
+				threading.Thread(target=handle, daemon=True, args=(client, address)).start()
+			elif data == "REQUEST=GET_ROUTE_LIST":
+				send_file(client, "route_list.txt")
+				log(f"{address[0]}:{address[1]} get route list")
 				client.close()
-				log("Error number length")
-			
-			if number in numbers_connect:
-				client.send("REQUEST=TRUE".encode("utf-8"))
-				client.close()
-				log(f"{address[0]}:{address[1]} check number: TRUE")
-			else:
-				client.send("REQUEST=FALSE".encode("utf-8"))
-				client.close()
-				log(f"{address[0]}:{address[1]} check number: FALSE")
-		elif data == "REQUEST=SEND_NODE:KEY":
-			log(f"{address[0]}:{address[1]} send node key")
-			number = client.recv(1024).decode("utf-8")
-
-			public_key = client.recv(4096)
-
-			if number in numbers:
-				number_index = numbers.index(number)
-				client_data = clients[number_index]
-				client_data.send(public_key)
-
-				client.send("REQUEST=OKAY".encode("utf-8"))
-			else:
-				client.send("REQUEST=NOT_FOUND".encode("utf-8"))
-			
-			client.close()
-		elif data == "REQUEST=SEND_CODE:MESSAGE":
-			number = client.recv(1024).decode("utf-8")
-
-			message = client.recv(4096)
-
-			if number in numbers:
-				number_index = numbers.index(number)
-				client_data = clients[number_index]
-				client_data.send(message)
-
-				client.send("REQUEST=OKAY".encode("utf-8"))
-			else:
-				client.send("REQUEST=NOT_FOUND".encode("utf-8"))
-			
-			client.close()
-		elif data == "REQUEST=ADD_NODE":
-			log(f"{address[0]}:{address[1]} add node")
-			add_node(address)
+			elif data == "REQUEST=ADD_NODE":
+				log(f"{address[0]}:{address[1]} add node")
+				add_node(address)
+		except UnicodeDecodeError:
+			send_all_clients(data)
+			send_all_nodes(data)
 
 def encrypt(public_key, message):
 	key = RSA.import_key(public_key)
@@ -422,8 +305,6 @@ def receive(client, private_key):
 			print("\n" + "[" + get_now_date() + "] " + message + "\n")
 		except Exception as error:
 			print("Error! " + str(error))
-			client.close()
-			break
 
 def writer(client, public_key):
 	while True:
@@ -435,7 +316,7 @@ def writer(client, public_key):
 			print("")
 
 		if message != "":
-			message = f"{number} {username} > {message}"
+			message = f"{username} > {message}"
 
 			print("[" + get_now_date() + "] " + message)
 
@@ -448,12 +329,6 @@ if os.path.isfile("route_list.txt") == False:
 if os.path.isfile("log.txt") == False:
 	file = open("log.txt", "w+")
 	file.close()
-
-if os.path.isfile("banned_ips.txt") == False:
-	file = open("banned_ips.txt", "w+")
-	file.close()
-
-banned_ips = get_banned_ips()
 
 clear()
 
@@ -472,21 +347,12 @@ if os.path.isfile("public_key.txt") == False or os.path.isfile("private_key.txt"
 	file.write(private_key)
 	file.close()
 
-if client_switch == True:
-	file = open("public_key.txt", "rb")
-	public_key_1 = file.read()
-	file.close()
-
-	file = open("private_key.txt", "rb")
-	private_key = file.read()
-	file.close()
-
 if server_switch == True:
 	if server_ip == "":
 		server_ip = get_ip()
 
 		if server_ip == False:
-			server_ip = input("Enter server IP: ")
+			print("Error IP")
 
 print("[LOG] Get route list..")
 route_list = get_route_list()
@@ -516,15 +382,30 @@ if client_switch == True:
 
 		print("[LOG] Server started")
 
-	username = input("Enter the user name: ")
+	if os.path.exists("friends") == False:
+		os.mkdir("friends")
 
-	if auto_node_select == True:
-		ip_node = random.choice(route_list)
-	elif auto_node_select == False:
-		if ip_connect_node == "":
+	username = input("Enter username: ")
+	friend_username = input("Enter username friend: ")
+
+	try:
+		file = open("friends/" + friend_username + ".txt", "rb")
+		public_key = file.read()
+		file.close()
+	except:
+		print("Error! Unknown username.")
+
+	file = open("private_key.txt", "rb")
+	private_key = file.read()
+	file.close()
+
+	if ip_connect_node == "":
+		if auto_node_select == True:
+			ip_node = random.choice(route_list)
+		elif auto_node_select == False:
 			ip_node = input("Enter the IP address of the server you want to connect: ")
-		else:
-			ip_node = ip_connect_node
+	else:
+		ip_node = ip_connect_node
 
 	print(f"[LOG] Connecting to {ip_node}:{port}..")
 
@@ -548,51 +429,23 @@ if client_switch == True:
 		sys.exit()
 	elif data == "REQUEST=SUCCESFUL_AUTH":
 		print("[LOG] Authorization has been successfully completed!")
-	
-	number = hashlib.sha256(public_key_1).hexdigest()
-	
-	print("Your number: " + number)
 
-	client.send(public_key_1)
+	print("[LOG] Successful connection!")
 
-	number_connect = input("Enter the number of the user you want to connect: ")
+	time.sleep(2)
 
-	client.send(number_connect.encode("utf-8"))
+	clear()
 
-	data = client.recv(1024).decode("utf-8")
+	print("Welcome to Secure Communication!")
+	print("")
+	print("Your username: " + username)
+	print("Friend username: " + friend_username)
+	print("")
 
-	if data[0:14] == "REQUEST=KICKED":
-		reason = data[15:9999]
-		print("You are kicked for a reason: " + reason)
-
-		client.close()
-
-		sys.exit()
-
-	if data == "REQUEST=WAITING":
-		print("Waiting for the user to connect..")
-
-		data = client.recv(1024).decode("utf-8")
-
-	if data == "REQUEST=SUCCESFUL_CHANNEL_CREATED":
-		public_key_2 = client.recv(4096)
-
-		print("[LOG] Successful connection!")
-
-		time.sleep(2)
-
-		clear()
-
-		print("Secure Communication Channel")
-		print("")
-		print("Your username: " + username)
-		print("Your number: " + number)
-		print("")
-
-		receive_thread = threading.Thread(target=receive, daemon=True, args=(client, private_key))  # Получение всех сообщений
-		receive_thread.start()
-		writer_thread = threading.Thread(target=writer, daemon=True, args=(client, public_key_2))  # Отправка сообщений
-		writer_thread.start()
+	receive_thread = threading.Thread(target=receive, daemon=True, args=(client, private_key))  # Получение всех сообщений
+	receive_thread.start()
+	writer_thread = threading.Thread(target=writer, daemon=True, args=(client, public_key))  # Отправка сообщений
+	writer_thread.start()
 
 	while True:
 		time.sleep(1)
